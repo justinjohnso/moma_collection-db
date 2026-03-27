@@ -1,23 +1,33 @@
 # AGENTS.md — `_db_moma-collection`
 
-This repository contains a **SQLite database builder** for the Museum of Modern Art (MoMA) collection data.
+This repository contains a **SQLite database builder** for the Museum of Modern Art (MoMA) collection data with **automatic rebuilding on updates**.
 
 ## Repository Summary
 
 - **Purpose**: Build and maintain a local SQLite database from MoMA's collection repository
 - **Source**: MoMA collection data from `collection/` submodule (git@github.com:MuseumofModernArt/collection.git)
-- **Database**: `moma_full.db` (SQLite)
+- **Database**: `moma_full.db` (SQLite, tracked in git for submodule users)
 - **Builder**: `build_moma.py` (Python script)
-- **Language**: Python
+- **Auto-Update**: Git hook automatically rebuilds database on `git pull` when submodule changes
+- **Language**: Python, Bash
 
 ## Project Structure
 
 ```text
 _db_moma-collection/
 ├── collection/              # Git submodule → MoMA collection repo
+│   ├── Artworks.json       # Source data (Git LFS, ~138MB)
+│   ├── Artists.json        # Source data (Git LFS, ~3.4MB)
+│   └── README.md           # MoMA's collection documentation
+├── .githooks/              # Version-controlled git hooks
+│   └── post-merge          # Auto-rebuild trigger
 ├── build_moma.py           # Database builder script
-├── moma_full.db            # Generated SQLite database
-└── AGENTS.md               # This file
+├── setup.sh                # One-time setup script (configures hooks)
+├── moma_full.db            # Generated SQLite database (~72MB, tracked)
+├── .gitignore              # Git ignore patterns
+├── .gitmodules             # Submodule configuration
+├── AGENTS.md               # This file (AI assistant context)
+└── README.md               # User-facing documentation
 ```
 
 ## Git Submodule Notes
@@ -29,21 +39,123 @@ The `collection/` directory is a **git submodule** pointing to:
 To update the submodule:
 ```bash
 git submodule update --remote collection
+git pull  # Triggers automatic rebuild via post-merge hook
+```
+
+## Automatic Rebuild System
+
+### How It Works
+1. User runs `git pull` (or merges changes)
+2. Git executes `.githooks/post-merge` hook (if configured via `core.hooksPath`)
+3. Hook detects if `collection/` submodule commit changed using `git diff-tree`
+4. If changed, hook automatically:
+   - Updates submodule files: `git submodule update --init --recursive`
+   - Pulls LFS files: `git lfs pull` (in collection directory)
+   - Rebuilds database: `python3 build_moma.py`
+5. Database (`moma_full.db`) is regenerated with latest data
+6. Changes are committed to track the updated database
+
+### Setup for Distribution
+The repository uses `core.hooksPath` to reference the `.githooks/` directory:
+- **Version-controlled hooks**: `.githooks/post-merge` is committed to repo
+- **Setup command**: `./setup.sh` runs `git config core.hooksPath .githooks`
+- **No manual copying**: No need to copy hooks to `.git/hooks/`
+- **Instant activation**: Works immediately after running `./setup.sh`
+- **Per-repo config**: `core.hooksPath` is local to this repository only
+
+### Why This Approach
+- **Distribution-ready**: Hooks are committed, not local
+- **Safe**: Hook errors don't fail git operations
+- **Automatic**: No manual rebuild steps needed
+- **Transparent**: Clear feedback when rebuilding occurs
+- **Submodule-friendly**: Database file is tracked for parent repos
+
+### Submodule Usage
+
+When this repo is used as a submodule in a parent repository:
+
+**What works:**
+- ✅ Pre-built `moma_full.db` is available immediately (tracked in git)
+- ✅ `build_moma.py` script can be run from parent repo
+- ✅ Git hooks are isolated (don't affect parent repo)
+
+**What doesn't work:**
+- ❌ Automatic rebuilds (hooks only work in standalone mode)
+- ❌ `setup.sh` isn't run automatically
+
+**Parent repo example:**
+```bash
+# In parent repo, after submodule update
+cd vendor/_db_moma-collection
+python3 build_moma.py  # Rebuild if needed
+cd ../..
 ```
 
 ## Engineering Notes
 
-- Keep database schema decisions documented in code comments
-- Preserve data integrity from source JSON/CSV files
-- Log import progress and any data validation issues
-- Do not modify files in `collection/` — it's a read-only submodule
+### Database Management
+- **Schema**: Dynamically generated from JSON structure; decisions documented in code comments
+- **Data integrity**: Preserve original data; all transformations are reversible or documented
+- **File size**: Database is ~72MB; JSON sources are ~141MB total (138MB + 3.4MB)
+- **Git tracking**: Database IS tracked in git (for submodule users who need immediate access)
+- **Rebuild logic**: `build_moma.py` drops and recreates tables on each run
 
-## Workflow
+### Submodule Handling
+- **Read-only**: Never modify files in `collection/` — it's a git submodule
+- **Updates**: Use `git submodule update --remote collection` to fetch latest from MoMA
+- **LFS files**: Require `git lfs pull` in collection directory to download full JSON files
+- **Submodule commit**: Tracked in parent repo; changes trigger auto-rebuild
 
-1. Make surgical changes relevant to the request
-2. Test database build with `python build_moma.py`
-3. Validate schema and data integrity before finishing
-4. Update AGENTS.md when behavior or architecture changes
+### Hook System
+- **Detection method**: Uses `git diff-tree -r --name-only ORIG_HEAD HEAD` to detect submodule changes
+- **Error handling**: Hook exits with 0 (success) even on errors to avoid breaking git operations
+- **Isolation**: Hooks are repository-local; don't affect parent repos when used as submodule
+- **Standalone only**: Automatic rebuilds only work when repo is cloned directly, not as submodule
+
+### Workflow Best Practices
+- Log import progress and data validation issues during build
+- Test database integrity after rebuild: query record counts, check for NULL values
+- When updating collection submodule, commit the updated database file
+- Keep build times reasonable: current build takes ~10-30 seconds depending on hardware
+
+## Development Workflow
+
+### For AI Assistants Working on This Repo
+
+1. **Understanding changes**: Review `build_moma.py` to understand data transformations
+2. **Testing changes**: Always run `python3 build_moma.py` and verify output
+3. **Database validation**: 
+   - Check record counts match source data
+   - Verify schema with `sqlite3 moma_full.db ".schema"`
+   - Sample query: `SELECT COUNT(*) FROM artworks;` should return ~160,000
+4. **Documentation updates**: Update AGENTS.md or README.md when behavior changes
+5. **Commit strategy**: Commit database updates when collection submodule is updated
+
+### Common Tasks
+
+**Update to latest MoMA data:**
+```bash
+git submodule update --remote collection
+cd collection && git lfs pull && cd ..
+python3 build_moma.py
+# Commit the updated database if satisfied
+```
+
+**Test the hook:**
+```bash
+# Verify hook is configured
+git config --get core.hooksPath  # Should output: .githooks
+
+# Manually trigger rebuild
+python3 build_moma.py
+```
+
+**Validate database:**
+```bash
+sqlite3 moma_full.db "SELECT COUNT(*) FROM artworks;"  # ~160,000
+sqlite3 moma_full.db "SELECT COUNT(*) FROM artists;"   # ~15,800
+sqlite3 moma_full.db ".schema artworks" | head -10     # Show schema
+```
 
 ---
 

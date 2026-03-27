@@ -1,0 +1,52 @@
+#!/bin/bash
+# post-merge hook: Auto-rebuild database when collection submodule is updated
+# This hook is triggered after: git pull, git merge
+
+# Get the repository root
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT" || exit 1
+
+# Check if the collection submodule commit has changed
+# Compare previous HEAD to current HEAD for changes in the submodule
+if git diff-tree -r --name-only --no-commit-id ORIG_HEAD HEAD | grep -q "^collection$"; then
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "🔄 Collection submodule updated - rebuilding database..."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # Check if Python is available
+    if ! command -v python3 &> /dev/null; then
+        echo "❌ Error: python3 not found. Database rebuild skipped."
+        echo "   Install Python 3 to enable automatic database rebuilds."
+        exit 0  # Don't fail the merge
+    fi
+    
+    # Check if build script exists
+    if [ ! -f "build_moma.py" ]; then
+        echo "❌ Error: build_moma.py not found. Database rebuild skipped."
+        exit 0  # Don't fail the merge
+    fi
+    
+    # Update submodule files (ensure they're checked out)
+    echo "📥 Updating submodule files..."
+    git submodule update --init --recursive
+    
+    # Pull LFS files if available
+    if [ -d "collection/.git" ] && command -v git-lfs &> /dev/null; then
+        echo "📦 Pulling LFS files..."
+        (cd collection && git lfs pull 2>&1 | grep -v "^Git LFS:" || true)
+    fi
+    
+    # Run the database builder
+    echo "🏗️  Rebuilding database..."
+    if python3 build_moma.py; then
+        echo "✅ Database rebuilt successfully!"
+        echo "   Generated: moma_full.db"
+    else
+        echo "❌ Database rebuild failed. Please check the error messages above."
+        echo "   You can rebuild manually with: python3 build_moma.py"
+        exit 0  # Don't fail the merge
+    fi
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+fi
+
